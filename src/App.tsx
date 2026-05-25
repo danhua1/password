@@ -7,8 +7,10 @@ import {
   encryptVault,
   hasVault,
   loadEncryptedVault,
+  loadQuickAddDraft,
   loadUnlockedVaultSession,
   resetVault,
+  saveQuickAddDraft,
   saveUnlockedVaultSession,
   UNLOCK_TTL_MS,
 } from './storage';
@@ -62,9 +64,10 @@ export function App() {
   const [showEditPassword, setShowEditPassword] = useState(false);
   const [showGeneratedPassword, setShowGeneratedPassword] = useState(false);
   const [fillPickerItems, setFillPickerItems] = useState<VaultItem[] | null>(null);
+  const [pendingQuickAddDraft, setPendingQuickAddDraft] = useState<Partial<DraftItem> | null>(null);
 
   useEffect(() => {
-    Promise.all([hasVault(), currentTabUrl(), loadUnlockedVaultSession()]).then(([exists, url, session]) => {
+    Promise.all([hasVault(), currentTabUrl(), loadUnlockedVaultSession(), loadQuickAddDraft()]).then(([exists, url, session, quickDraft]) => {
       setHasExistingVault(exists);
       setTabUrl(url);
 
@@ -74,6 +77,15 @@ export function App() {
         setUnlockExpiresAt(session.expiresAt);
         setLocked(false);
         setLastActiveAt(now());
+      }
+
+      if (quickDraft) {
+        setPendingQuickAddDraft({
+          title: quickDraft.title,
+          url: quickDraft.url,
+          username: quickDraft.username,
+          password: quickDraft.password
+        });
       }
 
       setIsInitialized(true);
@@ -162,16 +174,37 @@ export function App() {
       setUnlockExpiresAt(Date.now() + UNLOCK_TTL_MS);
       setLocked(false);
       setLastActiveAt(now());
+
+      if (pendingQuickAddDraft) {
+        setEditingId(null);
+        setDraft({
+          ...emptyDraft,
+          title: pendingQuickAddDraft.title || (pendingQuickAddDraft.url ? domainFromUrl(pendingQuickAddDraft.url) : ''),
+          url: pendingQuickAddDraft.url || tabUrl,
+          username: pendingQuickAddDraft.username || '',
+          password: pendingQuickAddDraft.password || ''
+        });
+        setShowEditPassword(Boolean(pendingQuickAddDraft.password));
+        setPage('edit');
+        setPendingQuickAddDraft(null);
+        await saveQuickAddDraft({ title: '', url: '', username: '', password: '' });
+      }
     } catch {
       setError('解锁失败，请检查主密码。');
     }
   }
 
-  function startCreate(prefill = false) {
-    const url = prefill ? tabUrl : '';
+  function startCreate(prefill = false, quickDraft?: Partial<DraftItem>) {
+    const url = quickDraft?.url ?? (prefill ? tabUrl : '');
     setEditingId(null);
-    setDraft({ ...emptyDraft, url, title: url ? domainFromUrl(url) : '' });
-    setShowEditPassword(false);
+    setDraft({
+      ...emptyDraft,
+      url,
+      title: quickDraft?.title ?? (url ? domainFromUrl(url) : ''),
+      username: quickDraft?.username ?? '',
+      password: quickDraft?.password ?? ''
+    });
+    setShowEditPassword(Boolean(quickDraft?.password));
     setPage('edit');
   }
 
@@ -204,6 +237,8 @@ export function App() {
       : [{ id: createId(), ...draft, createdAt: timestamp, updatedAt: timestamp }, ...vault.items];
 
     await saveVault({ ...vault, items: nextItems });
+    await saveQuickAddDraft({ title: '', url: '', username: '', password: '' });
+    setPendingQuickAddDraft(null);
     setPage('list');
     setDraft(emptyDraft);
     setEditingId(null);

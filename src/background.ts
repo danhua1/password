@@ -1,8 +1,9 @@
 import { formatVaultItemLabel, getMatchingVaultItems } from './password';
-import { loadUnlockedVaultSession } from './storage';
+import { clearQuickAddDraft, loadUnlockedVaultSession, saveQuickAddDraft } from './storage';
 
 const MENU_ID = 'light-passbox-fill';
 const MENU_ITEM_PREFIX = `${MENU_ID}:item:`;
+const QUICK_ADD_MENU_ID = 'light-passbox-quick-add';
 
 async function rebuildContextMenu(tabUrl?: string) {
   await chrome.contextMenus.removeAll();
@@ -10,6 +11,12 @@ async function rebuildContextMenu(tabUrl?: string) {
   chrome.contextMenus.create({
     id: MENU_ID,
     title: '使用 Light Passbox 填充登录信息',
+    contexts: ['page', 'editable']
+  });
+
+  chrome.contextMenus.create({
+    id: QUICK_ADD_MENU_ID,
+    title: '快速保存当前页面',
     contexts: ['page', 'editable']
   });
 
@@ -46,6 +53,19 @@ async function rebuildContextMenu(tabUrl?: string) {
   });
 }
 
+async function captureQuickAddDraft(tabId: number) {
+  const response = await chrome.tabs.sendMessage(tabId, {
+    type: 'LIGHT_PASSBOX_CAPTURE_QUICK_ADD_DRAFT'
+  });
+
+  return {
+    title: response?.title?.trim() || '',
+    url: response?.url || '',
+    username: response?.username || '',
+    password: response?.password || ''
+  };
+}
+
 chrome.runtime.onInstalled.addListener(() => {
   void rebuildContextMenu();
 });
@@ -64,9 +84,21 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   void rebuildContextMenu(tab.url);
 });
 
-
 chrome.contextMenus.onClicked.addListener(async (info: chrome.contextMenus.OnClickData, tab?: chrome.tabs.Tab) => {
   if (!tab?.id || !tab.url) return;
+
+  if (info.menuItemId === QUICK_ADD_MENU_ID) {
+    const draft = await captureQuickAddDraft(tab.id).catch(() => ({ title: '', url: tab.url ?? '', username: '', password: '' }));
+    await saveQuickAddDraft({
+      title: draft.title || tab.title || '',
+      url: draft.url || tab.url,
+      username: draft.username,
+      password: draft.password
+    });
+    await chrome.action.openPopup();
+    return;
+  }
+
   if (!String(info.menuItemId).startsWith(MENU_ITEM_PREFIX)) return;
 
   const session = await loadUnlockedVaultSession();

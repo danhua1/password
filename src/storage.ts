@@ -112,6 +112,15 @@ type UnlockedVaultSession = {
   expiresAt: number;
 };
 
+type QuickAddDraft = {
+  title: string;
+  url: string;
+  username: string;
+  password: string;
+};
+
+const QUICK_ADD_DRAFT_KEY = 'light-passbox-quick-add-draft';
+
 export async function saveUnlockedVaultSession(vault: VaultData, keyBytes: Uint8Array, expiresAt = Date.now() + UNLOCK_TTL_MS) {
   await chrome.storage.session.set({
     [UNLOCK_SESSION_KEY]: {
@@ -139,6 +148,19 @@ export async function loadUnlockedVaultSession() {
   };
 }
 
+export async function saveQuickAddDraft(draft: QuickAddDraft) {
+  await chrome.storage.session.set({ [QUICK_ADD_DRAFT_KEY]: draft });
+}
+
+export async function loadQuickAddDraft() {
+  const result = await chrome.storage.session.get(QUICK_ADD_DRAFT_KEY);
+  return (result[QUICK_ADD_DRAFT_KEY] as QuickAddDraft | undefined) ?? null;
+}
+
+export async function clearQuickAddDraft() {
+  await chrome.storage.session.remove(QUICK_ADD_DRAFT_KEY);
+}
+
 export async function clearUnlockedVaultSession() {
   await chrome.storage.session.remove(UNLOCK_SESSION_KEY);
 }
@@ -146,4 +168,5 @@ export async function clearUnlockedVaultSession() {
 export async function resetVault() {
   await chrome.storage.local.remove(VAULT_KEY);
   await clearUnlockedVaultSession();
+  await clearQuickAddDraft();
 }

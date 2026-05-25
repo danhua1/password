@@ -10,7 +10,11 @@ type ContextResultMessage = {
   reason?: string;
 };
 
-type RuntimeMessage = FillMessage | ContextResultMessage;
+type CaptureQuickAddDraftMessage = {
+  type: 'LIGHT_PASSBOX_CAPTURE_QUICK_ADD_DRAFT';
+};
+
+type RuntimeMessage = FillMessage | ContextResultMessage | CaptureQuickAddDraftMessage;
 
 const usernameSelectors = [
   'input[autocomplete="username"]',
@@ -47,6 +51,18 @@ function fillCredentials(username: string, password: string) {
   return Boolean(usernameInput || passwordInput);
 }
 
+function captureQuickAddDraft() {
+  const usernameInput = firstInput(usernameSelectors);
+  const passwordInput = firstInput(['input[type="password"]']);
+
+  return {
+    title: document.title.trim(),
+    url: location.href,
+    username: usernameInput?.value ?? '',
+    password: passwordInput?.value ?? ''
+  };
+}
+
 chrome.runtime.onMessage.addListener((message: RuntimeMessage, _sender, sendResponse) => {
   if (message.type === 'LIGHT_PASSBOX_FILL') {
     const ok = fillCredentials(message.username, message.password);
@@ -56,6 +72,11 @@ chrome.runtime.onMessage.addListener((message: RuntimeMessage, _sender, sendResp
 
   if (message.type === 'LIGHT_PASSBOX_CONTEXT_RESULT') {
     sendResponse({ ok: message.ok, reason: message.reason });
+    return true;
+  }
+
+  if (message.type === 'LIGHT_PASSBOX_CAPTURE_QUICK_ADD_DRAFT') {
+    sendResponse(captureQuickAddDraft());
     return true;
   }
 
