@@ -1,5 +1,17 @@
 import { FormEvent, useEffect, useMemo, useState } from 'react';
-import { defaultVault, decryptVault, encryptVault, hasVault, loadEncryptedVault, resetVault } from './storage';
+import {
+  base64ToBytes,
+  defaultVault,
+  decryptVault,
+  deriveVaultKey,
+  encryptVault,
+  hasVault,
+  loadEncryptedVault,
+  loadUnlockedVaultSession,
+  resetVault,
+  saveUnlockedVaultSession,
+  UNLOCK_TTL_MS,
+} from './storage';
 import { domainFromUrl, generatePassword, isSameSite } from './password';
 import type { VaultData, VaultItem } from './types';
 
@@ -35,6 +47,8 @@ export function App() {
   const [hasExistingVault, setHasExistingVault] = useState(false);
   const [masterPassword, setMasterPassword] = useState('');
   const [vault, setVault] = useState<VaultData>(defaultVault);
+  const [vaultKey, setVaultKey] = useState<Uint8Array | null>(null);
+  const [unlockExpiresAt, setUnlockExpiresAt] = useState<number | null>(null);
   const [page, setPage] = useState<Page>('list');
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState<DraftItem>(emptyDraft);
@@ -47,19 +61,38 @@ export function App() {
   const [lastActiveAt, setLastActiveAt] = useState(now());
 
   useEffect(() => {
-    Promise.all([hasVault(), currentTabUrl()]).then(([exists, url]) => {
+    Promise.all([hasVault(), currentTabUrl(), loadUnlockedVaultSession()]).then(([exists, url, session]) => {
       setHasExistingVault(exists);
       setTabUrl(url);
+
+      if (session) {
+        setVault(session.vault);
+        setVaultKey(session.keyBytes);
+        setUnlockExpiresAt(session.expiresAt);
+        setLocked(false);
+        setLastActiveAt(now());
+      }
+
       setIsInitialized(true);
     });
   }, []);
+
+  useEffect(() => {
+    if (locked || !unlockExpiresAt) return;
+
+    const timer = window.setInterval(() => {
+      if (now() >= unlockExpiresAt) void lock();
+    }, 15_000);
+
+    return () => window.clearInterval(timer);
+  }, [locked, unlockExpiresAt]);
 
   useEffect(() => {
     if (locked) return;
 
     const timer = window.setInterval(() => {
       const autoLockMs = vault.settings.autoLockMinutes * 60 * 1000;
-      if (autoLockMs > 0 && now() - lastActiveAt > autoLockMs) lock();
+      if (autoLockMs > 0 && now() - lastActiveAt > autoLockMs) void lock();
     }, 15_000);
 
     return () => window.clearInterval(timer);
@@ -69,18 +102,23 @@ export function App() {
     setLastActiveAt(now());
   }
 
-  function lock() {
+  async function lock() {
     setLocked(true);
     setMasterPassword('');
     setVault(defaultVault);
+    setVaultKey(null);
+    setUnlockExpiresAt(null);
     setPage('list');
     setEditingId(null);
     setDraft(emptyDraft);
   }
 
   async function saveVault(nextVault: VaultData) {
+    if (!vaultKey) throw new Error('Vault is locked');
+
     const encrypted = await loadEncryptedVault();
-    await encryptVault(masterPassword, nextVault, encrypted?.salt);
+    await encryptVault(vaultKey, nextVault, encrypted ? base64ToBytes(encrypted.salt) : undefined);
+    await saveUnlockedVaultSession(nextVault, vaultKey, unlockExpiresAt ?? now() + UNLOCK_TTL_MS);
     setVault(nextVault);
     touch();
   }
@@ -96,14 +134,26 @@ export function App() {
 
     try {
       const encrypted = await loadEncryptedVault();
+
       if (!encrypted) {
-        await encryptVault(masterPassword, defaultVault);
-        setVault(defaultVault);
-        setHasExistingVault(true);
+        const salt = crypto.getRandomValues(new Uint8Array(16));
+        const key = await deriveVaultKey(masterPassword, salt);
+        const nextVault = defaultVault;
+        await encryptVault(key, nextVault, salt);
+        await saveUnlockedVaultSession(nextVault, key);
+        setVault(nextVault);
+        setVaultKey(key);
       } else {
-        setVault(await decryptVault(masterPassword, encrypted));
+        const salt = base64ToBytes(encrypted.salt);
+        const key = await deriveVaultKey(masterPassword, salt);
+        const nextVault = await decryptVault(key, encrypted);
+        await saveUnlockedVaultSession(nextVault, key);
+        setVault(nextVault);
+        setVaultKey(key);
       }
 
+      setHasExistingVault(true);
+      setUnlockExpiresAt(Date.now() + UNLOCK_TTL_MS);
       setLocked(false);
       setLastActiveAt(now());
     } catch {
@@ -220,7 +270,7 @@ export function App() {
           <button className="primary" type="submit">
             {hasExistingVault ? '解锁密码箱' : '创建密码箱'}
           </button>
-          <p className="hint">数据只保存在 `chrome.storage.local`，主密码不会被保存，忘记后无法恢复。</p>
+          <p className="hint">解锁后会保持 24 小时，主密码不会被保存，忘记后无法恢复。</p>
         </form>
       </main>
     );
@@ -234,7 +284,7 @@ export function App() {
             <h1>密码箱</h1>
             <p>{tabUrl ? `当前站点：${domainFromUrl(tabUrl)}` : '管理本地密码'}</p>
           </div>
-          <button onClick={lock}>锁定</button>
+          <button onClick={() => void lock()}>锁定</button>
         </header>
 
         <div className="actions">
@@ -266,7 +316,7 @@ export function App() {
                   <button onClick={() => copyText(item.username, '用户名')}>用户</button>
                   <button onClick={() => copyText(item.password, '密码')}>密码</button>
                   <button onClick={() => startEdit(item)}>编辑</button>
-                  <button className="danger" onClick={() => deleteItem(item.id)}>删除</button>
+                  <button className="danger" onClick={() => void deleteItem(item.id)}>删除</button>
                 </div>
               </article>
             ))
@@ -319,7 +369,7 @@ export function App() {
         <header className="topbar"><h1>设置</h1><button onClick={() => setPage('list')}>返回</button></header>
         <section className="card stack">
           <label>自动锁定时间（分钟）<input type="number" min="1" max="120" value={vault.settings.autoLockMinutes} onChange={(event) => saveVault({ ...vault, settings: { autoLockMinutes: Number(event.target.value) || 10 } })} /></label>
-          <button className="danger" onClick={async () => { if (confirm('确定清空整个密码箱吗？此操作不可恢复。')) { await resetVault(); lock(); setHasExistingVault(false); } }}>清空密码箱</button>
+          <button className="danger" onClick={async () => { if (confirm('确定清空整个密码箱吗？此操作不可恢复。')) { await resetVault(); await lock(); setHasExistingVault(false); } }}>清空密码箱</button>
         </section>
       </main>
     );

@@ -4,11 +4,13 @@ type FillMessage = {
   password: string;
 };
 
-type ContextMessage = {
-  type: 'LIGHT_PASSBOX_FILL_FROM_CONTEXT';
+type ContextResultMessage = {
+  type: 'LIGHT_PASSBOX_CONTEXT_RESULT';
+  ok: boolean;
+  reason?: string;
 };
 
-type RuntimeMessage = FillMessage | ContextMessage;
+type RuntimeMessage = FillMessage | ContextResultMessage;
 
 const usernameSelectors = [
   'input[autocomplete="username"]',
@@ -52,8 +54,8 @@ chrome.runtime.onMessage.addListener((message: RuntimeMessage, _sender, sendResp
     return true;
   }
 
-  if (message.type === 'LIGHT_PASSBOX_FILL_FROM_CONTEXT') {
-    sendResponse({ ok: false, reason: '请先在插件弹窗中解锁并选择账号填充。' });
+  if (message.type === 'LIGHT_PASSBOX_CONTEXT_RESULT') {
+    sendResponse({ ok: message.ok, reason: message.reason });
     return true;
   }
 
