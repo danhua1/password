@@ -1,3 +1,4 @@
+import type { VaultItem } from './types';
 import type { GeneratedPasswordOptions } from './types';
 
 const letters = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
@@ -41,4 +42,13 @@ export function isSameSite(itemUrl: string, currentUrl: string) {
   const itemDomain = domainFromUrl(itemUrl);
   const currentDomain = domainFromUrl(currentUrl);
   return Boolean(itemDomain && currentDomain && (itemDomain === currentDomain || currentDomain.endsWith(`.${itemDomain}`)));
+}
+
+export function getMatchingVaultItems(items: VaultItem[], currentUrl: string) {
+  return items.filter((item) => isSameSite(item.url, currentUrl));
+}
+
+export function formatVaultItemLabel(item: Pick<VaultItem, 'title' | 'url' | 'username'>) {
+  const title = item.title.trim() || domainFromUrl(item.url) || '未命名账号';
+  return `${title} · ${item.username || '无用户名'}`;
 }

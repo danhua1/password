@@ -12,7 +12,7 @@ import {
   saveUnlockedVaultSession,
   UNLOCK_TTL_MS,
 } from './storage';
-import { domainFromUrl, generatePassword, isSameSite } from './password';
+import { domainFromUrl, formatVaultItemLabel, generatePassword, getMatchingVaultItems, isSameSite } from './password';
 import type { VaultData, VaultItem } from './types';
 
 type Page = 'list' | 'edit' | 'generator' | 'settings';
@@ -59,6 +59,9 @@ export function App() {
   const [generatorOptions, setGeneratorOptions] = useState({ length: 18, includeNumbers: true, includeSymbols: true });
   const [tabUrl, setTabUrl] = useState('');
   const [lastActiveAt, setLastActiveAt] = useState(now());
+  const [showEditPassword, setShowEditPassword] = useState(false);
+  const [showGeneratedPassword, setShowGeneratedPassword] = useState(false);
+  const [fillPickerItems, setFillPickerItems] = useState<VaultItem[] | null>(null);
 
   useEffect(() => {
     Promise.all([hasVault(), currentTabUrl(), loadUnlockedVaultSession()]).then(([exists, url, session]) => {
@@ -111,6 +114,9 @@ export function App() {
     setPage('list');
     setEditingId(null);
     setDraft(emptyDraft);
+    setShowEditPassword(false);
+    setShowGeneratedPassword(false);
+    setFillPickerItems(null);
   }
 
   async function saveVault(nextVault: VaultData) {
@@ -165,6 +171,7 @@ export function App() {
     const url = prefill ? tabUrl : '';
     setEditingId(null);
     setDraft({ ...emptyDraft, url, title: url ? domainFromUrl(url) : '' });
+    setShowEditPassword(false);
     setPage('edit');
   }
 
@@ -178,6 +185,7 @@ export function App() {
       note: item.note,
       tags: item.tags
     });
+    setShowEditPassword(false);
     setPage('edit');
   }
 
@@ -199,6 +207,7 @@ export function App() {
     setPage('list');
     setDraft(emptyDraft);
     setEditingId(null);
+    setShowEditPassword(false);
     setStatus(editingId ? '已更新密码。' : '已保存密码。');
   }
 
@@ -224,11 +233,25 @@ export function App() {
         username: item.username,
         password: item.password
       });
-      setStatus(response?.ok ? '已填充到当前页面。' : '当前页面没有识别到可填充表单。');
+      setStatus(response?.ok ? `已填充：${formatVaultItemLabel(item)}。` : '当前页面没有识别到可填充表单。');
       touch();
     } catch {
       setStatus('无法填充当前页面，请刷新页面后重试。');
     }
+  }
+
+  async function fillCurrentSite() {
+    if (sameSiteItems.length === 0) {
+      setStatus('当前站点没有匹配账号。');
+      return;
+    }
+
+    if (sameSiteItems.length === 1) {
+      await fillItem(sameSiteItems[0]);
+      return;
+    }
+
+    setFillPickerItems(sameSiteItems);
   }
 
   const filteredItems = useMemo(() => {
@@ -243,6 +266,8 @@ export function App() {
         .includes(normalizedQuery)
     );
   }, [query, tabUrl, vault.items]);
+
+  const sameSiteItems = useMemo(() => getMatchingVaultItems(vault.items, tabUrl), [tabUrl, vault.items]);
 
   function renderLocked() {
     return (
@@ -276,6 +301,39 @@ export function App() {
     );
   }
 
+  function renderFillPicker() {
+    if (!fillPickerItems) return null;
+
+    return (
+      <div className="picker-backdrop" onClick={() => setFillPickerItems(null)}>
+        <div className="picker card stack" onClick={(event) => event.stopPropagation()}>
+          <div className="picker-header">
+            <div>
+              <h2>选择要填充的账号</h2>
+              <p>{domainFromUrl(tabUrl) || '当前站点'}</p>
+            </div>
+            <button onClick={() => setFillPickerItems(null)}>关闭</button>
+          </div>
+          <div className="picker-list">
+            {fillPickerItems.map((item) => (
+              <button
+                key={item.id}
+                className="picker-item"
+                onClick={async () => {
+                  setFillPickerItems(null);
+                  await fillItem(item);
+                }}
+              >
+                <strong>{item.title || domainFromUrl(item.url)}</strong>
+                <span>{item.username || '无用户名'}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   function renderList() {
     return (
       <main className="screen" onMouseDown={touch} onKeyDown={touch}>
@@ -288,9 +346,12 @@ export function App() {
         </header>
 
         <div className="actions">
-          <button className="primary" onClick={() => startCreate(true)}>保存当前站点</button>
-          <button onClick={() => setPage('generator')}>生成器</button>
-          <button onClick={() => setPage('settings')}>设置</button>
+          <button type="button" className="primary" onClick={() => void fillCurrentSite()} disabled={sameSiteItems.length === 0}>
+            填充当前站点
+          </button>
+          <button type="button" className="primary" onClick={() => startCreate(true)}>保存当前站点</button>
+          <button type="button" onClick={() => setPage('generator')}>生成器</button>
+          <button type="button" onClick={() => setPage('settings')}>设置</button>
         </div>
 
         <input className="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索网站、用户名、备注或标签" />
@@ -312,16 +373,18 @@ export function App() {
                   {isSameSite(item.url, tabUrl) && <small>匹配当前站点</small>}
                 </div>
                 <div className="item-actions">
-                  <button onClick={() => fillItem(item)}>填充</button>
-                  <button onClick={() => copyText(item.username, '用户名')}>用户</button>
-                  <button onClick={() => copyText(item.password, '密码')}>密码</button>
-                  <button onClick={() => startEdit(item)}>编辑</button>
-                  <button className="danger" onClick={() => void deleteItem(item.id)}>删除</button>
+                  <button type="button" onClick={() => fillItem(item)}>填充</button>
+                  <button type="button" onClick={() => copyText(item.username, '用户名')}>用户</button>
+                  <button type="button" onClick={() => copyText(item.password, '密码')}>密码</button>
+                  <button type="button" onClick={() => startEdit(item)}>编辑</button>
+                  <button type="button" className="danger" onClick={() => void deleteItem(item.id)}>删除</button>
                 </div>
               </article>
             ))
           )}
         </section>
+
+        {fillPickerItems && renderFillPicker()}
       </main>
     );
   }
@@ -331,14 +394,21 @@ export function App() {
       <main className="screen" onMouseDown={touch} onKeyDown={touch}>
         <header className="topbar">
           <h1>{editingId ? '编辑密码' : '新增密码'}</h1>
-          <button onClick={() => setPage('list')}>返回</button>
+          <button type="button" onClick={() => setPage('list')}>返回</button>
         </header>
 
         <form className="card stack" onSubmit={submitItem}>
           <label>网站名称<input value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} /></label>
           <label>网址<input value={draft.url} onChange={(event) => setDraft({ ...draft, url: event.target.value })} placeholder="https://example.com" /></label>
           <label>用户名<input value={draft.username} onChange={(event) => setDraft({ ...draft, username: event.target.value })} /></label>
-          <label>密码<div className="inline-field"><input value={draft.password} onChange={(event) => setDraft({ ...draft, password: event.target.value })} /><button type="button" onClick={() => setDraft({ ...draft, password: generatePassword(generatorOptions) })}>生成</button></div></label>
+          <label>
+            密码
+            <div className="inline-field">
+              <input type={showEditPassword ? 'text' : 'password'} value={draft.password} onChange={(event) => setDraft({ ...draft, password: event.target.value })} />
+              <button type="button" onClick={() => setShowEditPassword((current) => !current)}>{showEditPassword ? '隐藏' : '显示'}</button>
+              <button type="button" onClick={() => setDraft({ ...draft, password: generatePassword(generatorOptions) })}>生成</button>
+            </div>
+          </label>
           <label>标签<input value={draft.tags.join(', ')} onChange={(event) => setDraft({ ...draft, tags: event.target.value.split(',').map((tag) => tag.trim()).filter(Boolean) })} placeholder="工作, 常用" /></label>
           <label>备注<textarea value={draft.note} onChange={(event) => setDraft({ ...draft, note: event.target.value })} rows={3} /></label>
           {error && <p className="error">{error}</p>}
@@ -356,8 +426,16 @@ export function App() {
           <label>长度：{generatorOptions.length}<input type="range" min="12" max="40" value={generatorOptions.length} onChange={(event) => setGeneratorOptions({ ...generatorOptions, length: Number(event.target.value) })} /></label>
           <label className="check"><input type="checkbox" checked={generatorOptions.includeNumbers} onChange={(event) => setGeneratorOptions({ ...generatorOptions, includeNumbers: event.target.checked })} />包含数字</label>
           <label className="check"><input type="checkbox" checked={generatorOptions.includeSymbols} onChange={(event) => setGeneratorOptions({ ...generatorOptions, includeSymbols: event.target.checked })} />包含符号</label>
-          <button className="primary" onClick={() => setGenerated(generatePassword(generatorOptions))}>生成强密码</button>
-          {generated && <div className="generated"><code>{generated}</code><button onClick={() => copyText(generated, '生成的密码')}>复制</button></div>}
+          <button type="button" className="primary" onClick={() => { setGenerated(generatePassword(generatorOptions)); setShowGeneratedPassword(false); }}>生成强密码</button>
+          {generated && (
+            <div className="generated">
+              <code>{showGeneratedPassword ? generated : '•'.repeat(Math.max(generated.length, 8))}</code>
+              <div className="inline-field">
+                <button type="button" onClick={() => setShowGeneratedPassword((current) => !current)}>{showGeneratedPassword ? '隐藏' : '显示'}</button>
+                <button type="button" onClick={() => copyText(generated, '生成的密码')}>复制</button>
+              </div>
+            </div>
+          )}
         </section>
       </main>
     );
@@ -369,7 +447,7 @@ export function App() {
         <header className="topbar"><h1>设置</h1><button onClick={() => setPage('list')}>返回</button></header>
         <section className="card stack">
           <label>自动锁定时间（分钟）<input type="number" min="1" max="120" value={vault.settings.autoLockMinutes} onChange={(event) => saveVault({ ...vault, settings: { autoLockMinutes: Number(event.target.value) || 10 } })} /></label>
-          <button className="danger" onClick={async () => { if (confirm('确定清空整个密码箱吗？此操作不可恢复。')) { await resetVault(); await lock(); setHasExistingVault(false); } }}>清空密码箱</button>
+          <button type="button" className="danger" onClick={async () => { if (confirm('确定清空整个密码箱吗？此操作不可恢复。')) { await resetVault(); await lock(); setHasExistingVault(false); } }}>清空密码箱</button>
         </section>
       </main>
     );
