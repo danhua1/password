@@ -1,9 +1,13 @@
-import { formatVaultItemLabel, getMatchingVaultItems } from './password';
-import { clearQuickAddDraft, loadUnlockedVaultSession, saveQuickAddDraft } from './storage';
+import { formatVaultItemLabel, getMatchingVaultItems, domainFromUrl, isSameSite } from './password';
+import { encryptVault, loadEncryptedVault, loadUnlockedVaultSession, saveUnlockedVaultSession } from './storage';
 
 const MENU_ID = 'light-passbox-fill';
 const MENU_ITEM_PREFIX = `${MENU_ID}:item:`;
 const QUICK_ADD_MENU_ID = 'light-passbox-quick-add';
+
+function createId() {
+  return crypto.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
 
 async function rebuildContextMenu(tabUrl?: string) {
   await chrome.contextMenus.removeAll();
@@ -66,6 +70,29 @@ async function captureQuickAddDraft(tabId: number) {
   };
 }
 
+function buildQuickAddItem(url: string, title: string, username: string, password: string, existingId?: string) {
+  const timestamp = Date.now();
+  return {
+    id: existingId ?? createId(),
+    title: title.trim() || domainFromUrl(url) || '未命名账号',
+    url,
+    username,
+    password,
+    note: '',
+    tags: [],
+    createdAt: timestamp,
+    updatedAt: timestamp
+  };
+}
+
+function notify(title: string, message: string) {
+  chrome.runtime.sendMessage({ type: 'LIGHT_PASSBOX_SAVE_STATUS', title, message }).catch(() => undefined);
+}
+
+async function confirmOverwrite(url: string) {
+  return window.confirm(`该网址已保存过：${url}\n\n是否覆盖现有账号？`);
+}
+
 chrome.runtime.onInstalled.addListener(() => {
   void rebuildContextMenu();
 });
@@ -89,13 +116,32 @@ chrome.contextMenus.onClicked.addListener(async (info: chrome.contextMenus.OnCli
 
   if (info.menuItemId === QUICK_ADD_MENU_ID) {
     const draft = await captureQuickAddDraft(tab.id).catch(() => ({ title: '', url: tab.url ?? '', username: '', password: '' }));
-    await saveQuickAddDraft({
-      title: draft.title || tab.title || '',
-      url: draft.url || tab.url,
-      username: draft.username,
-      password: draft.password
-    });
-    await chrome.action.openPopup();
+    const encrypted = await loadEncryptedVault();
+    const session = await loadUnlockedVaultSession();
+    if (!encrypted || !session) {
+      return;
+    }
+
+    const nextUrl = draft.url || tab.url;
+    const duplicate = session.vault.items.find((item) => isSameSite(item.url, nextUrl) || item.url === nextUrl);
+    const shouldOverwrite = duplicate ? await confirmOverwrite(nextUrl) : true;
+    if (!shouldOverwrite) {
+      return;
+    }
+
+    const nextItem = buildQuickAddItem(nextUrl, draft.title || tab.title || '', draft.username, draft.password, duplicate?.id);
+    const nextItems = duplicate
+      ? [nextItem, ...session.vault.items.filter((item) => item.id !== duplicate.id)]
+      : [nextItem, ...session.vault.items];
+
+    const nextVault = {
+      ...session.vault,
+      items: nextItems
+    };
+
+    await encryptVault(session.keyBytes, nextVault, undefined);
+    await saveUnlockedVaultSession(nextVault, session.keyBytes, session.expiresAt);
+    await rebuildContextMenu(tab.url);
     return;
   }
 

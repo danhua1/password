@@ -90,6 +90,7 @@ export function App() {
 
       setIsInitialized(true);
     });
+
   }, []);
 
   useEffect(() => {
