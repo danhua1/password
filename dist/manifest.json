@@ -1,0 +1,23 @@
+{
+  "manifest_version": 3,
+  "name": "Light Passbox",
+  "description": "轻量版本地加密 Chrome 密码箱",
+  "version": "0.1.0",
+  "action": {
+    "default_popup": "index.html",
+    "default_title": "Light Passbox"
+  },
+  "permissions": ["storage", "activeTab", "scripting", "contextMenus"],
+  "host_permissions": ["<all_urls>"],
+  "background": {
+    "service_worker": "assets/background.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["assets/content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

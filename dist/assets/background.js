@@ -1,0 +1,1 @@
+chrome.runtime.onInstalled.addListener(()=>{chrome.contextMenus.create({id:"light-passbox-fill",title:"使用 Light Passbox 填充登录信息",contexts:["page","editable"]})});chrome.contextMenus.onClicked.addListener((s,e)=>{s.menuItemId!=="light-passbox-fill"||!(e!=null&&e.id)||chrome.tabs.sendMessage(e.id,{type:"LIGHT_PASSBOX_FILL_FROM_CONTEXT"})});
